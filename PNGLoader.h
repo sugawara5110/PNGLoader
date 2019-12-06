@@ -12,8 +12,7 @@
 class PNGLoader {
 
 private:
-	unsigned char* image = nullptr;
-	unsigned int imageNumChannel = 4;
+	const unsigned int imageNumChannel = 4;
 
 	class bytePointer {
 	private:
@@ -60,6 +59,9 @@ private:
 		}
 	};
 
+	void bindThePalette(unsigned char* outByte, unsigned char* index, unsigned char* Palette,
+		unsigned int wid, unsigned int hei, unsigned int numChannel);
+
 	void unfiltering(unsigned char* dstImage, unsigned char* srcImage,
 		unsigned int widByteSize, unsigned int numChannel, unsigned int heiByteSize);
 
@@ -68,9 +70,7 @@ private:
 		unsigned int srcWid, unsigned int srcNumChannel, unsigned int srcHei);
 
 public:
-	~PNGLoader();
-	bool loadPNG(char* pass, unsigned int outWid, unsigned int outHei);
-	unsigned char* getImage();
+	unsigned char* loadPNG(char* pass, unsigned int outWid, unsigned int outHei);
 };
 
 #endif
