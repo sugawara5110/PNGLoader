@@ -19,7 +19,6 @@ unsigned char* PNGLoader::loadPNG(char* pass, unsigned int outWid, unsigned int 
 	while (fgetc(fp) != EOF) {
 		count++;
 	}
-	count++;//EOFの分
 	fseek(fp, 0, SEEK_SET);//最初に戻す
 	bytePointer* bp = new bytePointer(count, fp);
 	fclose(fp);
