@@ -20,8 +20,19 @@ unsigned char* PNGLoader::loadPNG(char* pass, unsigned int outWid, unsigned int 
 		count++;
 	}
 	fseek(fp, 0, SEEK_SET);//最初に戻す
-	bytePointer* bp = new bytePointer(count, fp);
+	unsigned char* byte = new unsigned char[count];
+	fread(byte, sizeof(unsigned char), count, fp);
 	fclose(fp);
+	unsigned char* ret = loadPngInByteArray(byte, count, outWid, outHei);
+	delete[] byte;
+	byte = nullptr;
+
+	return ret;
+}
+
+unsigned char* PNGLoader::loadPngInByteArray(unsigned char* byteArray, unsigned int size, unsigned int outWid, unsigned int outHei) {
+
+	bytePointer* bp = new bytePointer(size, byteArray);
 
 	const unsigned int numPixel = outWid * imageNumChannel * outHei;
 	unsigned char* image = new unsigned char[numPixel];
@@ -37,7 +48,13 @@ unsigned char* PNGLoader::loadPNG(char* pass, unsigned int outWid, unsigned int 
 	static const unsigned char signature[numSignature] = { 137,80,78,71,13,10,26,10 };
 
 	for (int i = 0; i < numSignature; i++) {
-		if (bp->getChar() != signature[i])return nullptr;
+		if (bp->getChar() != signature[i]) {
+			delete bp;
+			bp = nullptr;
+			delete[] image;
+			image = nullptr;
+			return nullptr;
+		}
 	}
 
 	//IDATサイズカウント

@@ -8,6 +8,7 @@
 #define Class_PNGLoader_Header
 
 #include <stdio.h>
+#include <string.h>
 
 class PNGLoader {
 
@@ -21,10 +22,10 @@ private:
 		unsigned int Size = 0;
 		bytePointer() {}
 	public:
-		bytePointer(unsigned int size, FILE* fp) {
+		bytePointer(unsigned int size, unsigned char* byt) {
 			byte = new unsigned char[size];
-			fread(byte, sizeof(unsigned char), size, fp);
 			Size = size;
+			memcpy(byte, byt, size);
 		}
 		~bytePointer() {
 			delete[] byte;
@@ -71,6 +72,7 @@ private:
 
 public:
 	unsigned char* loadPNG(char* pass, unsigned int outWid, unsigned int outHei);
+	unsigned char* loadPngInByteArray(unsigned char* byteArray, unsigned int size, unsigned int outWid, unsigned int outHei);
 };
 
 #endif
