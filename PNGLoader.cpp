@@ -9,10 +9,19 @@
 #include "../DecompressDeflate/DecompressDeflate.h"
 #include <string.h>
 #include <stdlib.h>
+#include <memory>
 
-unsigned char* PNGLoader::loadPNG(char* pass, unsigned int outWid, unsigned int outHei) {
+static void setEr(char* errorMessage, char* inMessage) {
+	if (errorMessage) {
+		int size = (int)strlen(inMessage) + 1;
+		memcpy(errorMessage, inMessage, size);
+	}
+}
+
+unsigned char* PNGLoader::loadPNG(char* pass, unsigned int outWid, unsigned int outHei, char* errorMessage) {
 	FILE* fp = fopen(pass, "rb");
 	if (fp == NULL) {
+		setEr(errorMessage, "File read error");
 		return nullptr;
 	}
 	unsigned int count = 0;
@@ -20,42 +29,37 @@ unsigned char* PNGLoader::loadPNG(char* pass, unsigned int outWid, unsigned int 
 		count++;
 	}
 	fseek(fp, 0, SEEK_SET);//最初に戻す
-	unsigned char* byte = new unsigned char[count];
-	fread(byte, sizeof(unsigned char), count, fp);
+	std::unique_ptr<unsigned char[]> byte = std::make_unique<unsigned char[]>(count);
+	fread(byte.get(), sizeof(unsigned char), count, fp);
 	fclose(fp);
-	unsigned char* ret = loadPngInByteArray(byte, count, outWid, outHei);
-	delete[] byte;
-	byte = nullptr;
+	unsigned char* ret = loadPngInByteArray(byte.get(), count, outWid, outHei, errorMessage);
 
 	return ret;
 }
 
-unsigned char* PNGLoader::loadPngInByteArray(unsigned char* byteArray, unsigned int size, unsigned int outWid, unsigned int outHei) {
+unsigned char* PNGLoader::loadPngInByteArray(unsigned char* byteArray, unsigned int size,
+	unsigned int outWid, unsigned int outHei, char* errorMessage) {
 
-	bytePointer* bp = new bytePointer(size, byteArray);
-
-	const unsigned int numPixel = outWid * imageNumChannel * outHei;
-	unsigned char* image = new unsigned char[numPixel];
-	unsigned char* IDATByte = nullptr;
-	unsigned char* PLTEByte = nullptr;
-	unsigned int numPLTEByte = 0;
-	unsigned char* tRNSByte = nullptr;
-	unsigned int numtRNSByte = 0;
-	unsigned char* decompressImage = nullptr;
-	unsigned char* deployedImage = nullptr;
+	std::unique_ptr<bytePointer> bp = std::make_unique<bytePointer>();
+	bp->setPointer(size, byteArray);
 
 	static const unsigned char numSignature = 8;
 	static const unsigned char signature[numSignature] = { 137,80,78,71,13,10,26,10 };
 
 	for (int i = 0; i < numSignature; i++) {
 		if (bp->getChar() != signature[i]) {
-			delete bp;
-			bp = nullptr;
-			delete[] image;
-			image = nullptr;
+			setEr(errorMessage, "This file is not a png");
 			return nullptr;
 		}
 	}
+
+	std::unique_ptr<unsigned char[]> IDATByte = nullptr;
+	std::unique_ptr<unsigned char[]> PLTEByte = nullptr;
+	unsigned int numPLTEByte = 0;
+	std::unique_ptr<unsigned char[]> tRNSByte = nullptr;
+	unsigned int numtRNSByte = 0;
+	std::unique_ptr<unsigned char[]> decompressImage = nullptr;
+	std::unique_ptr<unsigned char[]> deployedImage = nullptr;
 
 	//IDATサイズカウント
 	unsigned int IDAT_Size = 0;
@@ -77,11 +81,9 @@ unsigned char* PNGLoader::loadPngInByteArray(unsigned char* byteArray, unsigned 
 		bp->getPointer(chunkDataLenght + 4);//IDAT以外スキップ
 	} while (bp->checkEOF());
 	bp->setIndex(index);
-	IDATByte = new unsigned char[IDAT_Size];
+	IDATByte = std::make_unique<unsigned char[]>(IDAT_Size);
 
 	//IHDRヘッダChunkData
-	unsigned int width = 0;
-	unsigned int height = 0;
 	unsigned int compNumChannel = 0;
 	unsigned int numChannel = 0;
 	unsigned char bitDepth = 0;
@@ -89,6 +91,25 @@ unsigned char* PNGLoader::loadPngInByteArray(unsigned char* byteArray, unsigned 
 	unsigned char compressionMethod = 0;
 	unsigned char filterMethod = 0;
 	unsigned char interlaceMethod = 0;
+	struct vec2 {
+		unsigned int w = 0;
+		unsigned int h = 0;
+	};
+	vec2 passSize[7] = {};
+	int allPassSize = 0;
+
+	struct InterlaceScan {
+		int xFactor, yFactor, xOffset, yOffset;
+	};
+	const InterlaceScan iScan[] = {
+		8, 8, 0, 0,
+		8, 8, 4, 0,
+		4, 8, 0, 4,
+		4, 4, 2, 0,
+		2, 4, 0, 2,
+		2, 2, 1, 0,
+		1, 2, 0, 1
+	};
 
 	//チャンク
 	unsigned int idatIndex = 0;
@@ -127,14 +148,28 @@ unsigned char* PNGLoader::loadPngInByteArray(unsigned char* byteArray, unsigned 
 				numChannel = 4;
 				break;
 			}
-
 			compressionMethod = bp->getChar();//0のみ(圧縮有のみ)
 			filterMethod = bp->getChar();//0のみ(フィルタリング有のみ)
 			interlaceMethod = bp->getChar();
 			const unsigned int CRC = bp->convertUCHARtoUINT();
+
 			//ピクセルの水平ライン先頭にフィルタタイプ情報1byte付加する
-			decompressImage = new unsigned char[((long long)width * compNumChannel + 1) * height];
-			deployedImage = new unsigned char[(long long)width * numChannel * height];
+			if (interlaceMethod) {
+				for (int i = 0; i < 7; i++) {
+					passSize[i].w = width / iScan[i].xFactor +
+						((int)width % iScan[i].xFactor > iScan[i].xOffset ? 1 : 0);
+					passSize[i].h = height / iScan[i].yFactor +
+						((int)height % iScan[i].yFactor > iScan[i].yOffset ? 1 : 0);
+					allPassSize += (passSize[i].w * compNumChannel * bitDepth / pivotBit + 1) * passSize[i].h;
+				}
+				decompressImage = std::make_unique<unsigned char[]>(allPassSize);
+			}
+			else {
+				decompressImage =
+					std::make_unique<unsigned char[]>(((long long)width * compNumChannel * bitDepth / pivotBit + 1) * height);
+			}
+
+			deployedImage = std::make_unique<unsigned char[]>((long long)width * compNumChannel * height);
 			continue;
 		}
 		if (!strcmp("PLTE", chunkType)) {
@@ -142,8 +177,8 @@ unsigned char* PNGLoader::loadPngInByteArray(unsigned char* byteArray, unsigned 
 				bp->getPointer(4);//CRC分スキップ
 				continue;
 			}
-			PLTEByte = new unsigned char[chunkDataLenght];
-			memcpy(PLTEByte, bp->getPointer(chunkDataLenght), sizeof(unsigned char) * chunkDataLenght);
+			PLTEByte = std::make_unique<unsigned char[]>(chunkDataLenght);
+			memcpy(PLTEByte.get(), bp->getPointer(chunkDataLenght), sizeof(unsigned char) * chunkDataLenght);
 			const unsigned int CRC = bp->convertUCHARtoUINT();
 			numPLTEByte = chunkDataLenght;
 			continue;
@@ -153,8 +188,8 @@ unsigned char* PNGLoader::loadPngInByteArray(unsigned char* byteArray, unsigned 
 				bp->getPointer(4);//CRC分スキップ
 				continue;
 			}
-			tRNSByte = new unsigned char[chunkDataLenght];
-			memcpy(tRNSByte, bp->getPointer(chunkDataLenght), sizeof(unsigned char) * chunkDataLenght);
+			tRNSByte = std::make_unique<unsigned char[]>(chunkDataLenght);
+			memcpy(tRNSByte.get(), bp->getPointer(chunkDataLenght), sizeof(unsigned char) * chunkDataLenght);
 			const unsigned int CRC = bp->convertUCHARtoUINT();
 			numtRNSByte = chunkDataLenght;
 			continue;
@@ -174,7 +209,10 @@ unsigned char* PNGLoader::loadPngInByteArray(unsigned char* byteArray, unsigned 
 		}
 		bp->getPointer(chunkDataLenght + 4);//次のチャンクへスキップ +4 はCRC分
 	} while (bp->checkEOF());
-	if (!bp->checkEOF())return nullptr;
+	if (!bp->checkEOF()) {
+		setEr(errorMessage, "chunk read error");
+		return nullptr;
+	}
 
 	//zlib フォーマット
 	//Compression method / flags code : 1 byte
@@ -187,13 +225,59 @@ unsigned char* PNGLoader::loadPngInByteArray(unsigned char* byteArray, unsigned 
 	unsigned char FDICT = (IDATByte[1] >> 5) & 0x01;//プリセット辞書
 	unsigned char FLEVEL = (IDATByte[1] >> 6) & 0x03;//圧縮レベル
 	DecompressDeflate de;
-	de.getDecompressArray(&IDATByte[2], IDAT_Size - 6, decompressImage);
+	de.getDecompressArray(&IDATByte[2], IDAT_Size - 6, decompressImage.get());
 
-	unfiltering(deployedImage, decompressImage, width, compNumChannel, height);
+	std::unique_ptr<unsigned char[]> bitdepthSiftImage = nullptr;
+
+	if (interlaceMethod) {
+		std::unique_ptr<unsigned char[]> p = std::make_unique <unsigned char[]>(compNumChannel);
+		int decIndex = 0;
+		for (int i = 0; i < 7; i++) {
+
+			bitdepthSiftImage =
+				std::make_unique <unsigned char[]>((passSize[i].w * compNumChannel + 1) * passSize[i].h);
+
+			bitdepthSift(bitdepthSiftImage.get(), &decompressImage[decIndex], passSize[i].w, passSize[i].h,
+				compNumChannel, bitDepth);
+			decIndex += (passSize[i].w * compNumChannel * bitDepth / pivotBit + 1) * passSize[i].h;
+
+			std::unique_ptr<unsigned char[]> depImage =
+				std::make_unique <unsigned char[]>(passSize[i].w * compNumChannel * passSize[i].h);
+
+			unfiltering(depImage.get(), bitdepthSiftImage.get(), passSize[i].w, compNumChannel, passSize[i].h);
+			bitdepthSiftImage.reset();
+			int pIndex = 0;
+			for (unsigned int y = iScan[i].yOffset; y < height; y += iScan[i].yFactor) {
+				for (unsigned int x = iScan[i].xOffset * compNumChannel;
+					x < width * compNumChannel;
+					x += (iScan[i].xFactor * compNumChannel)) {
+
+					memcpy(p.get(), &depImage[pIndex], sizeof(unsigned char) * compNumChannel);
+					pIndex += compNumChannel;
+					unsigned char* pd = &deployedImage[width * compNumChannel * y + x];
+					memcpy(pd, p.get(), sizeof(unsigned char) * compNumChannel);
+				}
+			}
+		}
+	}
+	else {
+		bitdepthSiftImage =
+			std::make_unique <unsigned char[]>((width * compNumChannel + 1) * height);
+
+		bitdepthSift(bitdepthSiftImage.get(), decompressImage.get(), width, height, compNumChannel, bitDepth);
+
+		unfiltering(deployedImage.get(), bitdepthSiftImage.get(), width, compNumChannel, height);
+	}
+	if (outWid <= 0 || outHei <= 0) {
+		outWid = width;
+		outHei = height;
+	}
+	const unsigned int numPixel = outWid * imageNumChannel * outHei;
+	unsigned char* image = new unsigned char[numPixel];//外部で開放
 
 	if (colorType == 3) {
 		numChannel++;
-		unsigned char* palette = new unsigned char[numPLTEByte + (numPLTEByte / 3)];
+		std::unique_ptr<unsigned char[]> palette = std::make_unique <unsigned char[]>(numPLTEByte + (numPLTEByte / 3));
 		unsigned int cnt = 0;
 		for (unsigned int i = 0; i < numPLTEByte; i += 3) {
 			palette[i] = PLTEByte[i];
@@ -204,36 +288,47 @@ unsigned char* PNGLoader::loadPngInByteArray(unsigned char* byteArray, unsigned 
 				palette[i + 3] = tRNSByte[cnt++];
 			}
 		}
-		unsigned char* color = new unsigned char[(long long)width * numChannel * height];
-		bindThePalette(color, deployedImage, palette, width, height, numChannel);
-		delete[] palette;
-		palette = nullptr;
-		resize(colorType, image, color,
+		std::unique_ptr<unsigned char[]> color = std::make_unique <unsigned char[]>((long long)width * numChannel * height);
+		bindThePalette(color.get(), deployedImage.get(), palette.get(), width, height, numChannel);
+		resize(colorType, image, color.get(),
 			outWid, outHei,
 			width, numChannel, height);
-		delete[] color;
-		color = nullptr;
 	}
 	else {
-		resize(colorType, image, deployedImage,
+		resize(colorType, image, deployedImage.get(),
 			outWid, outHei,
 			width, numChannel, height);
 	}
 
-	delete[] deployedImage;
-	deployedImage = nullptr;
-	delete[] IDATByte;
-	IDATByte = nullptr;
-	delete[] decompressImage;
-	decompressImage = nullptr;
-	delete[] PLTEByte;
-	PLTEByte = nullptr;
-	delete[] tRNSByte;
-	tRNSByte = nullptr;
-	delete bp;
-	bp = nullptr;
+	setEr(errorMessage, "OK");
 
 	return image;
+}
+
+static const int bitMask[]{
+	0b00000000,
+	0b00000001,
+	0b00000011,
+	0b00000111,
+	0b00001111,
+	0b00011111,
+	0b00111111,
+	0b01111111,
+	0b11111111
+};
+void PNGLoader::bitdepthSift(unsigned char* siftImage, unsigned char* decom, unsigned int decomW, unsigned int decomH,
+	unsigned int compNumChannel, unsigned char BitDepth) {
+
+	const int wid = decomW * compNumChannel * BitDepth / pivotBit + 1;
+	int siftImageIndex = 0;
+	for (unsigned int y = 0; y < decomH; y++) {
+		for (int x = 0; x < wid; x++) {
+			if (x == 0) { siftImage[siftImageIndex++] = decom[wid * y + x]; continue; }
+			for (int p = pivotBit - BitDepth; p >= 0; p -= BitDepth) {
+				siftImage[siftImageIndex++] = (decom[wid * y + x] >> p)& bitMask[BitDepth];
+			}
+		}
+	}
 }
 
 //paethアルゴリズム  

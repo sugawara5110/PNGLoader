@@ -14,15 +14,15 @@ class PNGLoader {
 
 private:
 	const unsigned int imageNumChannel = 4;
+	const unsigned char pivotBit = 8;
 
 	class bytePointer {
 	private:
 		unsigned char* byte = nullptr;
 		unsigned int index = 0;
 		unsigned int Size = 0;
-		bytePointer() {}
 	public:
-		bytePointer(unsigned int size, unsigned char* byt) {
+		void setPointer(unsigned int size, unsigned char* byt) {
 			byte = new unsigned char[size];
 			Size = size;
 			memcpy(byte, byt, size);
@@ -60,6 +60,12 @@ private:
 		}
 	};
 
+	unsigned int width = 0;
+	unsigned int height = 0;
+
+	void bitdepthSift(unsigned char* siftImage, unsigned char* decom, unsigned int decomW, unsigned int decomH,
+		unsigned int compNumChannel, unsigned char BitDepth);
+
 	void bindThePalette(unsigned char* outByte, unsigned char* index, unsigned char* Palette,
 		unsigned int wid, unsigned int hei, unsigned int numChannel);
 
@@ -71,8 +77,14 @@ private:
 		unsigned int srcWid, unsigned int srcNumChannel, unsigned int srcHei);
 
 public:
-	unsigned char* loadPNG(char* pass, unsigned int outWid, unsigned int outHei);
-	unsigned char* loadPngInByteArray(unsigned char* byteArray, unsigned int size, unsigned int outWid, unsigned int outHei);
+	unsigned char* loadPNG(char* pass, unsigned int outWid, unsigned int outHei,
+		char* errorMessage = nullptr);
+
+	unsigned char* loadPngInByteArray(unsigned char* byteArray, unsigned int size,
+		unsigned int outWid, unsigned int outHei, char* errorMessage = nullptr);
+
+	unsigned int getSrcWidth() { return width; }
+	unsigned int getSrcHeight() { return height; }
 };
 
 #endif
