@@ -124,6 +124,10 @@ unsigned char* PNGLoader::loadPngInByteArray(unsigned char* byteArray, unsigned 
 			width = bp->convertUCHARtoUINT();
 			height = bp->convertUCHARtoUINT();
 			bitDepth = bp->getChar();//ビット深度1,2,4,8,16まである
+			if (bitDepth > pivotBit) {
+				setEr(errorMessage, "Bit depth 16bit not supported");
+				return nullptr;
+			}
 			colorType = bp->getChar();
 			//全3bit, αチャンネル有無,カラーorグレー,パレット使用有無 
 			switch (colorType) {
@@ -277,16 +281,20 @@ unsigned char* PNGLoader::loadPngInByteArray(unsigned char* byteArray, unsigned 
 
 	if (colorType == 3) {
 		numChannel++;
-		std::unique_ptr<unsigned char[]> palette = std::make_unique <unsigned char[]>(numPLTEByte + (numPLTEByte / 3));
+		std::unique_ptr<unsigned char[]> palette =
+			std::make_unique <unsigned char[]>(numPLTEByte + (numPLTEByte / 3));//アルファ値分多く取得
+
 		unsigned int cnt = 0;
+		unsigned int paletteCnt = 0;
 		for (unsigned int i = 0; i < numPLTEByte; i += 3) {
-			palette[i] = PLTEByte[i];
-			palette[i + 1] = PLTEByte[i + 1];
-			palette[i + 2] = PLTEByte[i + 2];
-			palette[i + 3] = 255;
+			palette[paletteCnt++] = PLTEByte[i];
+			palette[paletteCnt++] = PLTEByte[i + 1];
+			palette[paletteCnt++] = PLTEByte[i + 2];
+			palette[paletteCnt] = 255;
 			if (cnt < numtRNSByte) {
-				palette[i + 3] = tRNSByte[cnt++];
+				palette[paletteCnt] = tRNSByte[cnt++];
 			}
+			paletteCnt++;
 		}
 		std::unique_ptr<unsigned char[]> color = std::make_unique <unsigned char[]>((long long)width * numChannel * height);
 		bindThePalette(color.get(), deployedImage.get(), palette.get(), width, height, numChannel);
